@@ -1,0 +1,25 @@
+﻿// Each #kernel tells which function to compile; you can have many kernels
+#pragma kernel HizLerpMip
+#include "UnityCG.cginc"
+RWTexture2D<float>      _SrcTex;
+RWTexture2D<float>      _DstTex;
+float2                  _Size;
+
+
+[numthreads(8,8,1)]
+void HizLerpMip(uint2 id : SV_DispatchThreadID)
+{
+    if (id.x > _Size.x || id.y > _Size.y)
+        return;
+
+    uint2 ori_id    = id * 2;
+    float4 value    = float4(_SrcTex[ori_id], _SrcTex[ori_id + uint2(1, 0)], _SrcTex[ori_id + uint2(1, 1)], _SrcTex[ori_id + uint2(0, 1)]);
+
+    #ifdef UNITY_REVERSED_Z
+        value.xy    = min( value.xy, value.zw );
+        _DstTex[id] = min( value.x, value.y);
+    #else
+        value.xy    = max(value.xy, value.zw);
+        _DstTex[id] = max(value.x, value.y);
+    #endif
+}

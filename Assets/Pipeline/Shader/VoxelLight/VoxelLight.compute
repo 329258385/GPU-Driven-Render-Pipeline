@@ -1,0 +1,293 @@
+﻿#pragma kernel SetXYPlane
+#pragma kernel SetZPlane
+#pragma kernel CBDR
+#pragma kernel TBDR
+#pragma kernel DecalCull
+#include "UnityCG.cginc"
+#include "./CGINC/VoxelLight.cginc"
+
+
+
+
+float4x4						_InvVP;
+uint							_PointLightCount;
+uint							_SpotLightCount;
+RWTexture3D<float4>				_XYPlaneTexture;
+RWTexture2D<float4>				_ZPlaneTexture;
+StructuredBuffer<PointLight>	_AllPointLight;
+StructuredBuffer<SpotLight>		_AllSpotLight;
+RWStructuredBuffer<uint>		_PointLightIndexBuffer;
+RWStructuredBuffer<uint>		_SpotLightIndexBuffer;
+
+
+///-----------------------------------------------------------------------------------------------------
+/// _ZBufferParams 用于深度线性处理
+/// x = 1-far/near
+/// y = far / near
+/// z = x / far
+/// w = y / far
+
+
+/// ------------------------------------------------------------------------------------------------------
+/// _ScreenParams 参数
+/// x = screen.width
+/// y = screen.height
+/// z = 1 + 1 / screen.width
+/// w = 1 + 1.0 / screen.height
+inline float2 LinearEyeDepth(float2 z)
+{
+	return 1.0 / (_ZBufferParams.x * x + _ZBufferParams.w);
+}
+
+
+inline float2 EyeDepthToProj(float2 lin)
+{
+	return 
+}
+
+
+void GetMinMaxFrustum(float4 uv, float2 minmaxDepth, out float3 minValue, out float3 maxValue)
+{
+	uv			= uv * 2 - 1;
+	float4 worldPos = mul(_InvVP, float4(uv.xy, minmaxDepth.x, 1));
+	worldPos	/= worldPos.w;
+	minValue	= worldPos;
+	maxValue	= worldPos;
+
+	worldPos	= mul( _InvVP, float4(uv.xy, minmaxDepth.y, 1 ));
+	worldPos	/= worldPos.w;
+	minValue	= min( minValue, worldPos );
+	maxValue	= max( maxValue, worldPos );
+
+	worldPos	= mul( _InvVP, float4(uv.zw, minMaxDepth.x, 1));
+	worldPos	/= worldPos.w;
+	minValue	= min( minValue, worldPos );
+	maxValue	= max( maxValue, worldPos );
+
+	worldPos	= mul( _InvVP, float4(uv.zw, minMaxDepth.y, 1));
+	worldPos	/= worldPos.w;
+	minValue	= min( minValue, worldPos );
+	maxValue	= max( maxValue, worldPos );
+
+	worldPos	= mul( _InvVP, float4( uv.xw, minMaxDepth.x, 1));
+	worldPos	/= worldPos.w;
+	minValue	= min( minValue, worldPos );
+	maxValue	= max( maxValue, worldPos );
+
+	worldPos	= mul( _InvVP, float4( uv.xw, minMaxDepth.y, 1));
+	minValue	= min( minValue, worldPos );
+	maxValue	= max( maxValue, worldPos );
+
+	worldPos	= mul( _InvVP, float4( uv.zy, minMaxDepth.x, 1));
+	worldPos	/= worldPos.w;
+	minValue	= min( minValue, worldPos );
+	maxValue	= max( maxValue, worldPos );
+
+	worldPos	= mul( _InvVP, float4( uv.zy, minMaxDepth.y, 1));
+	worldPos	/= worldPos.w;
+	minValue	= min( minValue, worldPos );
+	maxValue	= max( maxValue, worldPos );
+}
+
+[numthreads(XRES, YRES, 1)]
+void SetXYPlane(uint2 id : SV_DispatchThreadID)
+{
+	float2 leftbotUV		= id / float2(XRES, YRES);
+	float2 righttopUV		= leftbotUV + (1.0 / float2(XRES, YRES));
+	leftbotUV				= leftbotUV * 2 - 1;			// [-1,1]
+	righttopUV				= righttopUV * 2 - 1;
+	const float nearZ		= 1;
+#if UNITY_REVERSED_Z
+	_XYPlaneTexture[uint3(id, 0)] = GetPlane(mul(_InvVP, float4( 1, righttopUV.y, nearZ, 1)), mul(_InvVP, float4(-1, righttopUV.y, nearZ, 1)), mul(_InvVP, float4(0, righttopUV.y, 0.5, 1)));
+	_XYPlaneTexture[uint3(id, 1)] = GetPlane(mul(_InvVP, float4(-1, leftbotUV.y,  nearZ, 1)), mul(_InvVP, float4( 1, leftbotUV.y,  nearZ, 1)), mul(_InvVP, float4(0, leftbotUV.y,  0.5, 1)));
+	_XYPlaneTexture[uint3(id, 2)] = GetPlane(mul(_InvVP, float4(leftbotUV.x, 1,  nearZ, 1)), mul(_InvVP, float4(leftbotUV.x, -1, neraZ, 1)), mul(_InvVP, float4(leftbotUV.x, 0.5, 1.0)));
+	_XYPlaneTexture[uint3(id, 3)] = GetPlane(mul(_InvVP, float4(righttopUV.x, -1, nearZ, 1)), mul(_InvVP, float4(righttopUV.x  1, nearZ, 1)), mul(_InvVP, float4(righttopUV.x, 0, 0.5, 1)));
+#else
+	_XYPlaneTexture[uint3(id, 0)] = GetPlane(mul(_InvVP, float4(-1, righttopUV.y, nearZ, 1)), mul(_InvVP, float4(1, righttopUV.y, nearZ, 1)), mul(_InvVP, float4(0, righttopUV.y, 0.5, 1)));
+	_XYPlaneTexture[uint3(id, 1)] = GetPlane(mul(_InvVP, float4( 1, leftbotUV.y,  nearZ, 1)), mul(_InvVP, float4(-1,leftbotUV.y,  nearZ, 1)), mul(_InvVP, float4(0, leftbotUV.y,  0.5, 1)));
+	_XYPlaneTexture[uint3(id, 2)] = GetPlane(mul(_InvVP, float4( leftbotUV.x, -1, nearZ, 1)), mul(_InvVP, float4(leftbotUV.x, 1,  nearZ, 1)), mul(_InvVP, float4(leftbotUV.x,  0, 0.5, 1)));
+	_XYPlaneTexture[uint3(id, 3)] = GetPlane(mul(_InvVP, float4( righttopUV.x, 1, nearZ, 1)), mul(_InvVP, float4(righttopUV.x -1, nearZ, 1)), mul(_InvVP, float4(righttopUV.x, 0, 0.5, 1)));
+#endif
+}
+
+
+[numthreads(ZRES, 1, 1)]
+void SetZPlane(uint id : SV_DISPATCHTHREADID)
+{
+	float3 backpos		= lerp(_CameraNearPos.xyz, _CameraFarPos.xyz, pow(id / (float)ZRES, CLUSTERRATE));
+	float3 forwardpos	= lerp(_CameraNearPos.xyz, _CameraFarPos.xyz, pow((id+1.0) / (float)ZRES, CLUSTERRATE));
+	_ZPlaneTexture[uint2(id, 0)] = GetPlane(-_CameraForward, backpos);
+	_ZPlaneTexture[uint2(id, 1)] = GetPlane( _CameraForward, forwardpos);
+}
+
+
+[numthreads(XRES, YRES,1)]
+void CBDR(uint3 id : SV_DISPATCHTHREADID)
+{
+	float4 planes[6];
+	uint i;
+	planes[0]			= _ZPlaneTexture[uint2(id.z, 0)];
+	planes[1]			= _ZPlaneTexture[uint2(id.z, 1)];
+	planes[2]			= _XYPlaneTexture[uint3(id.xy, 0)];
+	planes[3]			= _XYPlaneTexture[uint3(id.xy, 1)];
+	planes[4]			= _XYPlaneTexture[uint3(id.xy, 2)];
+	planes[5]			= _XYPlaneTexture[uint3(id.xy, 3)];
+
+	float3 backpos		= lerp(_CameraNearPos.w, _CameraFarPos.w, pow( id.z / (float)ZRES, CLUSTERRATE));
+	float3 forwardpos	= lerp(_CameraNearPos.w, _CameraFarPos.w, pow((id.z + 1.0) / (float)ZRES, CLUSTERRATE));
+	float2 uv			= float4( id.xy, id.xy + 1) / float4( XRES, YRES, XRES, YRES );
+	float2 depth		= EyeDepthToProj( float2(backpos, forwardpos));
+	float3 minPoint, maxPoint;
+	GetMinMaxFrustum(uv, depth, minPoint, maxPoint);
+
+	uint clusterCount	= 0;
+	uint sBufferIndex	= GetIndex(id, VOXELSIZE, (MAXLIGHTPERCLUSTER + 1)) + 1;
+	for (i = 0; i < _PointLightCount; ++i)
+	{
+		PointLight lit		= _AllPointLight[i];
+		float3 sphereMax	= lit.sphere.xyz + lit.sphere.w;
+		float3 sphereMin	= lit.sphere.xyz - lit.sphere.w;
+		float  outOfRange	= dot(sphereMax < minPoint, 1) + dot(sphereMin > maxPoint, 1);
+		if (outOfRange < 0.5 && SphereIntersect(lit.sphere, planes) > 0.5)
+		{
+			_PointLightIndexBuffer[sBufferIndex + clusterCount] = i;
+			clusterCount++;
+		}
+	}
+	_PointLightIndexBuffer[sBufferIndex - 1] = clusterCount + sBufferIndex;
+	clusterCount = 0;
+	for (i = 0; i < _SpotLightCout; ++i)
+	{
+		Cone lit		= _AllSpotLight[i].lightCone;
+		if (ConeIntersect(lit, planes) > 0.5)
+		{
+			_SpotLightIndexBuffer[sBufferIndex - 1] = i;
+			clusterCount++;
+		}
+	}
+	_SpotLightIndexBuffer[sBufferIndex - 1] = clusterCount + sBufferIndex;
+}
+
+int2				_TileSize;
+float3				_CameraPos;
+Texture2D<float2>	_DepthBoundTexture;
+RWTexture3D<int>	_PointLightTile;
+RWTexture3D<int>	_SpotLightTile;
+
+
+[numthreads(8,8,1)]
+void TBDR(uint2 id : SV_DISPATCHTHREADID)
+{
+	bool2 border = id >= _TileSize;
+	uint i;
+	if (border.x || border.y) return;
+
+	float2 uv		= (id + 0.5) / (float2)_TileSize;
+	float4 cornerUV = float4(float4(id.xy, id.xy) + float4(0, 0, 1, 1)) / float4(_TileSize.xy, _TileSize.xy);
+	cornerUV		= cornerUV * 2 - 1;
+
+	float4 tilePlanes[6];
+	const float nearZ = 1;
+#if UNITY_REVERSED_Z
+	tilePlanes[2]	= GetPlane( mul(_InvVP, float4( 1, cornerUV.w, nearZ, 1)), mul( _InvVP, float4(-1, cornerUV.w, nearZ, 1)), mul(_InvVP, float4( 0, cornerUV.w, 0.5, 1))); // TOP
+	tilePlanes[3]	= GetPlane( mul(_InvVP, float4(-1, cornerUV.y, nearZ, 1)), mul( _InvVP, float4( 1, cornerUV.y, nearZ, 1)), mul(_InvVP, float4( 0, cornerUV.y, 0.5, 1))); // DOWN
+	tilePlanes[4]	= GetPlane( mul(_InvVP, float4(cornerUV.x, 1,  nearZ, 1)), mul( _InvVP, float4(cornerUV.x, -1, nearZ, 1)), mul(_InvVP, float4(cornerUV.x, 0, 0.5, 1)));	 // LEFT
+	tilePlanes[5]	= GetPlane( mul(_InvVP, float4(cornerUV.z,-1,  nearZ, 1)), mul( _InvVP, float4(cornerUV.z,  1, nearZ, 1)), mul(_InvVP, float4(cornerUV.z, 0, 0.5, 1)));	 // RIGHT
+	float2	minMax  = _DepthBoundTexture[id].yx;
+#else
+	tilePlanes[2]	= GetPlane( mul(_InvVP, float4(-1, cornerUV.w, nearZ,1)), mul( _InvVP, float4( 1, cornerUV.w, nearZ, 1)), mul(_InvVP, float4( 0, cornerUV.w, 0.5, 1)));	// TOP
+	tilePlanes[3]	= GetPlane( mul(_InvVP, float4( 1, cornerUV.y, nearZ,1)), mul( _InvVP, float4(-1, cornerUV.y, nearZ, 1)), mul(_InvVP, float4( 0, cornerUV.y, 0.5, 1)));	// DOWN
+	tilePlanes[4]	= GetPlane( mul(_InvVP, float4(cornerUV.x, -1, nearZ,1)), mul( _InvVP, float4( cornerUV.x, 1, nearZ, 1)), mul(_InvVP, float4(cornerUV.x,  0, 0.5, 1))); // LEFT
+	tilePlanes[5]	= GetPlane( mul(_InvVP, float4(cornerUV.z,  1, nearZ,1)), mul( _InvVP, float4( cornerUV.z,-1, nearZ, 1)), mul(_InvVP, float4(cornerUV.z,  0, 0.5, 1))); //RIGHT
+	float2  minMax	= _DepthBoundTexture[id].xy;
+#endif
+
+	float3 eyeDepthBounding = LinearEyeDepth(minMax);
+	tilePlanes[0]	= GetPlane( -_CameraForward, _CameraPos + _CameraForward * eyeDepthBounding );	// BLACK
+	tilePlanes[1]	= GetPlane(  _CameraForward, _CameraPos + _CameraForward * eyeDepthBounding );	// FRONT
+
+
+	uint lightCount = 1;
+	for (i = 0; i < _PointLightCount; ++i)
+	{
+		PointLight lit = _AllPointLight[i];
+		if (SphereIntersect(lit.sphere, tilePlanes) > 0.5)
+		{
+			_PointLightTile[uint3(id, lightCount)] = i;
+			lightCount++;
+		}
+	}
+	_PointLightTile[uint3(id, 0)] = lightCount;
+
+	lightCount = 1;
+	for (i = 0; i < _SpotLightCount; ++i)
+	{
+		Cone cone = _AllSpotLight[i];
+		if (ConeIntersect(cone, tilePlanes) > 0.5)
+		{
+			_SpotLightTile[uint3[id, lightCount]] = i;
+			lightCount++;
+		}
+	}
+	_SpotLightTile[uint3(id, 0)] = lightCount;
+}
+
+
+StructuredBuffer<Decal>		_AllDecals;
+RWTexture3D<int>			_DecalTile;
+uint						_DecalCount;
+float BoxIntersectDecal(float3x4 localtoworld, float4 planes[6], float3 minValue, float3 maxValue, float3 decalMin, float3 decalMax)
+{
+	float3 position			= float3(localtoworld.m03, localtoworld.m13, localtoworld.m23);
+	float3 minLargerThanMax = decalMin > maxValue;
+	float3 maxLessThanMin	= decalMax < minValue;
+	if ((dot(minLargerThanMax, 1) + dot(maxLessThanMin, 1)) > 0.5)
+		return 0;
+
+	float result = 1;
+	for (uint i = 0; i < 6; ++i)
+	{
+		float4 plane		= planes[i];
+		float3 absNormal	= abs(mul(plane.xyz, (float3x3)localtoworld));
+		result *= ((dot(position, plane.xyz) - dot(absNormal, 0.5)) < -plane.w);
+	}
+	return result;
+}
+
+
+[numthreads(8,8,1)]
+void DecalCull(uint2 id : SV_DISPATCHTHREADID)
+{
+	bool2 border = id >= _TileSize;
+	uint i;
+	if (border.x || border.y)
+		return;
+
+	float2 leftDownUV	= (id / (float2)_TileSize.xy);
+	float2 rightUpUV	= ((id + 1.0) / (float2)_TileSize.xy);
+
+	float4 tilePlanes[6];
+	const float nearZ	= 1;
+	float3 minValue, maxValue;
+	tilePlanes[2]		= GetPlane(lerp(_FrustumCorners[0].xyz, _FrustumCorners[2].xyz, rightUpUV.y).xyz, lerp(_FrustumCorners[1].xyz, _FrustumCorners[3].xyz, rightUpUV.y).xyz, _CameraPos);          //TOP
+	tilePlanes[3]		= GetPlane(lerp(_FrustumCorners[1].xyz, _FrustumCorners[3].xyz, leftDownUV.y).xyz, lerp(_FrustumCorners[0].xyz, _FrustumCorners[2].xyz, leftDownUV.y).xyz, _CameraPos);        //DOWN
+	tilePlanes[4]		= GetPlane(lerp(_FrustumCorners[0].xyz, _FrustumCorners[1].xyz, leftDownUV.x).xyz, lerp(_FrustumCorners[2].xyz, _FrustumCorners[3].xyz, leftDownUV.x).xyz, _CameraPos);        //LEFT
+	tilePlanes[5]		= GetPlane(lerp(_FrustumCorners[2].xyz, _FrustumCorners[3].xyz, rightUpUV.x).xyz, lerp(_FrustumCorners[0].xyz, _FrustumCorners[1].xyz, rightUpUV.x).xyz, _CameraPos);          //RIGHT
+
+	float2 minMax		= _DepthBoundTexture[id].yx;
+	GetMinMaxFrustum(float4(leftDownUV, rightUpUV), minMax, minValue, maxValue);
+	float2 eyeDepth		= LinerEyeDepth(minMax);
+	tilePlanes[0]		= GetPlane(-_CameraForward, _CameraPos + _CameraForward * eyeDepth.x);
+	tilePlanes[1]		= GetPlane(_CameraForward, _CameraPos + _CameraForward * eyeDepth.y);
+
+	uint lightCount = 1;
+	[loop]
+	for (i = 0; i < _DecalCount; ++i) {
+		Decal dec = _AllDecals[i];
+		if (BoxIntersectDecal(dec.localToWorldMat, tilePlanes, minValue, maxValue, dec.minPosition, dec.maxPosition) > 0.5) {
+			_DecalTile[uint3(id, lightCount)] = i;
+			lightCount++;
+		}
+	}
+	_DecalTile[uint3(id, 0)] = lightCount;
+}

@@ -1,0 +1,50 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 8d72c9a805ae19e4493bea0a81fa6c1a, type: 3}
+  m_Name: GPUDriverRenderPipelineAsset
+  m_EditorClassIdentifier: 
+  m_RenderDataList:
+  - {fileID: 11400000, guid: 6693d91567c926a45bb50e6b68ce4490, type: 2}
+  clustermeshs: {fileID: 0}
+  availiableEvents: []
+  shaders:
+    cbdrShader: {fileID: 0}
+    gpuFrustumCulling: {fileID: 0}
+    gpuSkin: {fileID: 0}
+    streamingShader: {fileID: 0}
+    pointLightFrustumCulling: {fileID: 0}
+    terrainCompute: {fileID: 0}
+    volumetricScattering: {fileID: 0}
+    texCopyShader: {fileID: 0}
+    reflectionCullingShader: {fileID: 0}
+    voxelNoise: {fileID: 0}
+    occlusionProbeCalculate: {fileID: 0}
+    minMaxDepthCompute: {fileID: 0}
+    HizLodShader: {fileID: 0}
+    minMaxDepthBounding: {fileID: 0}
+    taaShader: {fileID: 0}
+    ssrShader: {fileID: 0}
+    indirectDepthShader: {fileID: 0}
+    reflectionShader: {fileID: 0}
+    linearDepthShader: {fileID: 0}
+    linearDrawerShader: {fileID: 0}
+    cubeDepthShader: {fileID: 0}
+    clusterRenderShader: {fileID: 0}
+    volumetricShader: {fileID: 0}
+    terrainShader: {fileID: 0}
+    spotLightDepthShader: {fileID: 0}
+    gtaoShader: {fileID: 0}
+    overrideOpaqueShader: {fileID: 0}
+    sssShader: {fileID: 0}
+    bakePreIntShader: {fileID: 0}
+    rapidBlurShader: {fileID: 0}
+    cyberGlitchShader: {fileID: 0}

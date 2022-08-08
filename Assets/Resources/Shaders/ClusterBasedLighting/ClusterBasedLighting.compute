@@ -1,0 +1,213 @@
+﻿#pragma kernel ClusterGenerate
+#include "UnityCG.cginc"
+
+
+
+
+struct ClusterBox
+{
+    float3 p0, p1, p2, p3, p4, p5, p6, p7;
+};
+RWStructuredBuffer<ClusterBox>              _clusterBuffer;
+
+
+float4x4                                    _viewMatrix;
+float4x4                                    _viewMatrixInv;
+float4x4                                    _vpMatrix;
+float4x4                                    _vpMatrixInv;
+float                                       _near;
+float                                       _far;
+float                                       _fovh;
+float                                       _numClusterX;
+float                                       _numClusterY;
+float                                       _numClusterZ;
+
+
+/// 
+// 自定义数据
+uint3           ClusterCB_GridDim;
+float           ClusterCB_ViewNear;
+uint2           ClusterCB_Size;
+float           ClusterCB_NearK;
+float           ClusterCB_LogGridDimY;
+float4          ClusterCB_ScreenDimensions;
+float4x4        _InverseProjectionMatrix;
+
+struct Plane
+{
+    float3      N;      // 面的法线
+    float       d;      // 到origin 的距离
+};
+
+
+/**
+* convert a 1D cluster index into a 3D cluster
+*/
+uint3 ComputeClusterIndex3D(uint clusterID)
+{
+    uint x      = clusterID %  ClusterCB_GridDim.x;
+    uint y      = clusterID % (ClusterCB_GridDim.x * ClusterCB_GridDim.y ) / ClusterCB_GridDim.x;
+    uint z      = clusterID / (ClusterCB_GridDim.x * ClusterCB_GridDim.y);
+    return uint3(x, y, z);
+}
+
+
+/** 
+* convert a 3D cluster index into a 1D cluster
+*/
+uint ComputeClusterIndex1D(uint3 clusterIndex3D)
+{
+    return  _numClusterX * _numClusterY  * clusterIndex3D.z
+            + _numClusterY * clusterIndex3D.y
+            + clusterIndex3D.x;
+}
+
+float3 MatTransformProj(float4x4 mat, float3 v3)
+{
+    float4 v4 = float4(v3, 1.0);
+    v4 = mul(mat, v4);
+    v4 /= v4.w;
+    return v4.xyz;
+}
+
+
+/**
+* Compute the 3D cluster index from a 2D screen position and Z depth in view space.
+* source: Clustered deferred and forward shading (Olsson, Billeter, Assarsson, 2012)
+*/
+uint3 ComputeClusterIndex3D(float2 screenPos, float viewZ)
+{
+    uint i = screenPos.x / ClusterCB_Size.x;
+    uint j = screenPos.y / ClusterCB_Size.y;
+    uint k = log(viewZ / ClusterCB_ViewNear) * ClusterCB_LogGridDimY;
+
+
+    return uint3(i, j, k);
+}
+
+
+/**
+ * Find the intersection of a line segment with a plane.
+ * This function will return true if an intersection point
+ * was found or false if no intersection could be found.
+ * Source: Real-time collision detection, Christer Ericson (2005)
+ */
+bool IntersectLinePlane(float3 a, float3 b, Plane p, out float3 q)
+{
+    float ab        = b -a;
+    float t         = ( p.d - dot( p.N, a )) / dot( p.N, b );
+    bool  intersect = (t >= 0.0f && t <= 1.0f);
+    q               = float3( 0, 0, 0 );
+    if( intersect )
+        q           = a + t * ab;
+    return intersect;
+}
+
+
+float4 ClipToView(float4 clip)
+{
+    float4 view     = mul( _InverseProjectionMatrix, clip );
+    view            = view / view.w;
+    return view;
+}
+
+
+float4 ScreenToView(float4 screen)
+{
+    float2 tex       = screen.xy * ClusterCB_ScreenDimensions.zw;
+    float4 clip      = float4( tex * 2.0f - 1.0f, screen.z, screen.w );
+    return ClipToView(clip);
+}
+
+
+#ifndef BLOCK_SIZE
+#define BLOCK_SIZE 1024
+#endif
+
+
+struct ComputeShaderInput
+{
+    uint3 GroupID           : SV_GroupID;           // 3D index of the thread group in the dispatch.
+    uint3 GroupThreadID     : SV_GroupThreadID;     // 3D index of local thread ID in a thread group.
+    uint3 DispatchThreadID  : SV_DispatchThreadID;  // 3D index of global thread ID in the dispatch.
+    uint  GroupIndex        : SV_GroupIndex;        // Flattened local index of the thread within a thread group.
+};
+// void ClusterGenerate(ComputeShaderInput cs_IDs )
+
+[numthreads(16, 16, 1)]
+void ClusterGenerate( uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID  )
+{
+    // cluster ID
+    uint i = gtid.x;
+    uint j = gtid.y;
+    uint k = gid.x;
+    uint3 clusterID_3D      = uint3(i, j, k);
+    uint clusterID          = ComputeClusterIndex1D(clusterID_3D);
+
+    // NDC 视锥体tile
+    float xmin = (i / _numClusterX) * 2 - 1;
+    float ymin = (j / _numClusterY) * 2 - 1;
+    float xmax = ((i + 1) / _numClusterX) * 2 - 1;
+    float ymax = ((j + 1) / _numClusterY) * 2 - 1;
+    float zmin = k / _numClusterZ;
+    float zmax = (k + 1) / _numClusterZ;
+
+    // 0， 1 做反投影转世界空间得到完整 cluster
+    float3 p0 = MatTransformProj(_vpMatrixInv, float3(xmin, ymin, 0));
+    float3 p1 = MatTransformProj(_vpMatrixInv, float3(xmin, ymin, 1));
+    float3 p2 = MatTransformProj(_vpMatrixInv, float3(xmin, ymax, 0));
+    float3 p3 = MatTransformProj(_vpMatrixInv, float3(xmin, ymax, 1));
+    float3 p4 = MatTransformProj(_vpMatrixInv, float3(xmax, ymin, 0));
+    float3 p5 = MatTransformProj(_vpMatrixInv, float3(xmax, ymin, 1));
+    float3 p6 = MatTransformProj(_vpMatrixInv, float3(xmax, ymax, 0));
+    float3 p7 = MatTransformProj(_vpMatrixInv, float3(xmax, ymax, 1));
+
+    // 世界空间下根据 k 切分出 cluster box
+    ClusterBox box;
+    box.p0 = p0 + zmin * (p1 - p0);
+    box.p1 = p0 + zmax * (p1 - p0);
+    box.p2 = p2 + zmin * (p3 - p2);
+    box.p3 = p2 + zmax * (p3 - p2);
+    box.p4 = p4 + zmin * (p5 - p4);
+    box.p5 = p4 + zmax * (p5 - p4);
+    box.p6 = p6 + zmin * (p7 - p6);
+    box.p7 = p6 + zmax * (p7 - p6);
+
+    _clusterBuffer[clusterID] = box;
+
+    //uint clusterIndex1D     = cs_IDs.DispatchThreadID.x;
+    //uint3 clusterIndex3D    = ComputeClusterIndex3D(clusterIndex1D);
+
+    //// Compute the near and far planes for cluster K.
+    //Plane nearPlane         = { 0.0f, 0.0f, 1.0f, ClusterCB_ViewNear * pow( abs(ClusterCB_NearK), clusterIndex3D.z )};
+    //Plane farPlane          = { 0.0f, 0.0f, 1.0f, ClusterCB_ViewNear * pow( abs(ClusterCB_NearK), clusterIndex3D.z + 1.0) };
+
+    //// The top-left point of cluster K in screen space.
+    //float4 pMin             = float4( clusterIndex3D.xy      * ClusterCB_Size.xy, 0.0f, 1.0f );
+    //// the down-right point of cluster K in screen space.
+    //float4 pMax             = float4((clusterIndex3D.xy + 1) * ClusterCB_Size.xy, 0.0f, 1.0f );
+
+    //// Transform the screen space points to view space.
+    //pMin                    = ScreenToView( pMin );
+    //pMax                    = ScreenToView( pMax );
+    //pMin.z                  *= -1;
+    //pMax.z                  *= -1;
+
+
+    ///// 以下数据是针对 view space
+    //// Find the min and max points on the near and far planes.
+    //float3 nearMin, nearMax, farMin, farMax;
+    //float3 eye = float3(0, 0, 0); // Origin (camera eye position)
+    //IntersectLinePlane( eye, (float3)pMin, nearPlane, nearMin );
+    //IntersectLinePlane( eye, (float3)pMax, nearPlane, nearMax );
+    //IntersectLinePlane( eye, (float3)pMin, farPlane, farMin );
+    //IntersectLinePlane( eye, (float3)pMax, farPlane, farMax );
+
+
+    //float3 aabbMin          = min( nearMin, min(nearMax, min(farMin, farMax)));
+    //float3 aabbMax          = max( nearMin, max(nearMax, max(farMin, farMax)));
+    //AABB aabb = { float4(aabbMin, 1.0f), float4(aabbMax, 1.0f) };
+    //RWClusterAABBs[clusterIndex1D] = aabb;
+}
+
+
